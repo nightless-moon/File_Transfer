@@ -9,6 +9,9 @@
 #include <unistd.h>    
 #include <fcntl.h>  
 #include <sys/types.h> 
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <stdlib.h>
 #define ker 1234
 
 #pragma pack(push, 1)
@@ -29,6 +32,7 @@ typedef struct
 	char** send_file_list;  // 待发送的文件路径列表
 	int send_file_cnt;      // 待发送的文件数量
 } user;
-
+void* comm_thr(void* arg);
+int send_file(int sock, const char* file_path);
 
 #endif
