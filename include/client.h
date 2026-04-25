@@ -12,7 +12,10 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#define buff_size 1024
+#include <sys/stat.h>
+#include <errno.h>
+#include <sys/time.h>
+#define buff_size 4096
 #pragma pack(push, 1)
 
 typedef struct 
@@ -21,6 +24,13 @@ typedef struct
     uint32_t mode;       //文件模式
     uint64_t size;       //文件大小
 } file_inof_t;
+
+typedef struct 
+{
+    file_inof_t file;       //文件信息
+    size_t received_size;   //已接收的字节数
+} received_file;
+
 
 #pragma pack(pop)
 int recve(int sock, file_inof_t* file, char* buff);

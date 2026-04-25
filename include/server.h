@@ -18,8 +18,8 @@
 typedef struct 
 {
     char name[101];        // 文件名
-    uint64_t size;         // 文件大小
     uint32_t mode;         // 文件模式 
+    uint64_t size;         // 文件大小
 } file_info;
 #pragma pack(pop)
 

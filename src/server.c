@@ -15,9 +15,9 @@ int main(int argc, char** argv)
 
     //定义ip信息
     struct sockaddr_in sockaddr;
-    sockaddr.sin_family = AF_INET;             //家族
-    sockaddr.sin_addr.s_addr = INADDR_ANY;     //任意主机号
-    sockaddr.sin_port = htons(9999);           //端口号9999
+    sockaddr.sin_family = AF_INET;                    //家族
+    sockaddr.sin_addr.s_addr = htonl(INADDR_ANY);     //任意主机号
+    sockaddr.sin_port = htons(9999);                  //端口号9999
 
     //绑定地址
     if(bind(sock_listen, (struct sockaddr*)&sockaddr, sizeof(sockaddr)) == -1)
@@ -139,13 +139,50 @@ int send_file(int sock, const char* file_path)
         return 2;
     }
 
-    //发送文件内容
-    int fd = open(file_path, O_RDONLY);
+    //等待客户端的续传请求
+
+     int fd = open(file_path, O_RDONLY);
     if(fd == -1)
     {
         perror("open fail");
         return 3;
     }
+
+    char buff[512];
+    rec = recv(sock, buff, sizeof(buff)-1, 0);
+    if(rec <= 0)    
+    {
+        if(rec == 0)
+            fprintf(stderr, "Connection closed by client\n");
+        else
+            perror("recv fail");
+        return 3;
+    }
+    buff[rec] = '\0';
+    if(strncmp(buff, "RESUME", 6) == 0)
+    {
+        size_t offset = strtoul(buff + 7, NULL, 10);
+        if(offset < fi.size)
+        {
+            // 客户端请求续传，发送确认
+            send(sock, "OK", 2, 0);
+            // 将文件指针移动到续传位置
+            lseek(fd, offset, SEEK_SET);
+            send_cnt = offset; // 更新已发送字节数
+        }
+        else
+        {
+            // 客户端请求续传，但偏移量无效，拒绝续传
+            send(sock, "NO", 2, 0);
+            lseek(fd, 0, SEEK_SET); // 从头开始发送
+        }
+    }
+    else
+    {
+        // 客户端未请求续传，默认从头开始发送
+        lseek(fd, 0, SEEK_SET);
+    }
+
 
     while((rec =read(fd, msg, sizeof(msg))) > 0)
     {
