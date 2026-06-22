@@ -1,4 +1,7 @@
 #include "server.h"
+#include "user.h"
+#include <ctype.h>
+
 int main(int argc, char** argv)
 {
     //创建套接字
@@ -32,6 +35,19 @@ int main(int argc, char** argv)
         perror("listen fail");
         exit(1);
     }
+
+    //用户数据库路径（默认users.db）
+    const char* user_db_path = "users.db";
+    if (argc >= 2) {
+        user_db_path = argv[1];
+    }
+
+    // 初始化用户数据库
+    if (init_user_db(user_db_path) != 0) {
+        perror("init_user_db fail");
+        exit(1);
+    }
+    printf("用户数据库初始化成功: %s\n", user_db_path);
 
     //接收客户端请求
     int sock_conn;
@@ -82,6 +98,7 @@ int main(int argc, char** argv)
 
     free(user_xin);
     close(sock_listen);
+    close_user_db();
     return 0;
 }
 
@@ -92,6 +109,132 @@ void* comm_thr(void* arg)
     user* user_xin = (user*)arg;
     pthread_detach(pthread_self());
     printf("\n客户端(%s:%hu)上线!\n", user_xin->ip, user_xin->port);
+
+    // 认证阶段
+    char auth_resp[1024];
+    int rec = recv(user_xin->sock_conn, auth_resp, sizeof(auth_resp) - 1, 0);
+    auth_resp[rec] = '\0';
+
+    if (rec <= 0) {
+        fprintf(stderr, "客户端认证失败: 连接关闭\n");
+        free(user_xin);
+        close(user_xin->sock_conn);
+        return NULL;
+    }
+
+    if (strncmp(auth_resp, "REGISTER", 8) == 0) {
+        // 注册请求
+        char username[50] = {0};
+        char password[50] = {0};
+
+        // 解析用户名和密码
+        char* space1 = strchr(auth_resp, ' ');
+        if (!space1) {
+            send(user_xin->sock_conn, "REGISTER_FAIL:格式错误", 26, 0);
+            close(user_xin->sock_conn);
+            free(user_xin);
+            return NULL;
+        }
+        space1++;
+
+        char* space2 = strchr(space1, ' ');
+        if (!space2) {
+            send(user_xin->sock_conn, "REGISTER_FAIL:格式错误", 26, 0);
+            close(user_xin->sock_conn);
+            free(user_xin);
+            return NULL;
+        }
+        space2++;
+
+        int len = space2 - space1;
+        if (len >= 49) len = 49;
+        strncpy(username, space1, len);
+        username[len] = '\0';
+
+        len = strlen(space2);
+        if (len >= 49) len = 49;
+        strncpy(password, space2, len);
+        password[len] = '\0';
+
+        printf("收到注册请求: %s\n", username);
+
+        int result = register_user(username, password, user_xin->ip, user_xin->port);
+        if (result == 0) {
+            save_users_to_file("users.json");
+            printf("用户 %s 注册成功\n", username);
+            send(user_xin->sock_conn, "REGISTER_OK", 11, 0);
+            strcpy(user_xin->username, username);
+            user_xin->is_authenticated = 1;
+        } else {
+            printf("用户 %s 注册失败\n", username);
+            const char* msg = result == -1 ? "用户已存在" : "用户列表已满";
+            send(user_xin->sock_conn, msg, strlen(msg), 0);
+            close(user_xin->sock_conn);
+            free(user_xin);
+            return NULL;
+        }
+
+    } else if (strncmp(auth_resp, "LOGIN", 5) == 0) {
+        // 登录请求
+        char username[50] = {0};
+        char password[50] = {0};
+
+        // 解析用户名和密码
+        char* space1 = strchr(auth_resp, ' ');
+        if (!space1) {
+            send(user_xin->sock_conn, "LOGIN_FAIL:格式错误", 21, 0);
+            close(user_xin->sock_conn);
+            free(user_xin);
+            return NULL;
+        }
+        space1++;
+
+        char* space2 = strchr(space1, ' ');
+        if (!space2) {
+            send(user_xin->sock_conn, "LOGIN_FAIL:格式错误", 21, 0);
+            close(user_xin->sock_conn);
+            free(user_xin);
+            return NULL;
+        }
+        space2++;
+
+        int len = space2 - space1;
+        if (len >= 49) len = 49;
+        strncpy(username, space1, len);
+        username[len] = '\0';
+
+        len = strlen(space2);
+        if (len >= 49) len = 49;
+        strncpy(password, space2, len);
+        password[len] = '\0';
+
+        printf("收到登录请求: %s\n", username);
+
+        int result = login_user(username, password);
+        if (result == 0) {
+            printf("用户 %s 登录成功\n", username);
+            send(user_xin->sock_conn, "LOGIN_OK", 8, 0);
+            strcpy(user_xin->username, username);
+            user_xin->is_authenticated = 1;
+        } else {
+            printf("用户 %s 登录失败\n", username);
+            const char* msg = result == -1 ? "用户不存在" : "密码错误";
+            send(user_xin->sock_conn, msg, strlen(msg), 0);
+            close(user_xin->sock_conn);
+            free(user_xin);
+            return NULL;
+        }
+
+    } else {
+        // 其他情况，要求先认证
+        send(user_xin->sock_conn, "AUTH_REQUIRED", 13, 0);
+        // 关闭连接，客户端应该重新连接
+        close(user_xin->sock_conn);
+        free(user_xin);
+        return NULL;
+    }
+
+    // 认证通过后，发送文件
     for(i = 0; i < user_xin->send_file_cnt; i++)
     {
         if(send_file(user_xin->sock_conn, user_xin->send_file_list[i]) == 0)
@@ -109,6 +252,12 @@ void* comm_thr(void* arg)
 
 //向特定客户端发送文件
 int send_file(int sock, const char* file_path)
+{
+    char msg[1024];                     //发送文件内容的缓冲区
+    file_info fi = {0};                 //存放文件信息的结构体
+    uint64_t send_cnt = 0;              //已发送的字节数
+    int rec;                            //接收函数的返回值
+    struct stat st;
 {
     char msg[1024];                     //发送文件内容的缓冲区
     file_info fi = {0};                 //存放文件信息的结构体

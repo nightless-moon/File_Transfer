@@ -1,10 +1,26 @@
 #include "client.h"
 #include "resume.h"
+#include "auth.h"
+#include <string.h>
+
 file_inof_t file;        //存放接收到的文件信息
 received_file rcv_file;  //存放接收到的文件信息和已接收的字节数
+
 int main(int argc, char** argv)
 {
-    //创建套接字
+    char server_ip[16];
+    char server_port[10];
+
+    // 获取服务器地址
+    printf("请输入服务器IP: ");
+    fgets(server_ip, sizeof(server_ip), stdin);
+    server_ip[strcspn(server_ip, "\n")] = '\0';
+
+    printf("请输入服务器端口: ");
+    fgets(server_port, sizeof(server_port), stdin);
+    server_port[strcspn(server_port, "\n")] = '\0';
+
+    // 创建套接字
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if(sock == -1)
     {
@@ -14,9 +30,9 @@ int main(int argc, char** argv)
 
     //服务端的结构信息
     struct sockaddr_in srv_addr;
-    srv_addr.sin_addr.s_addr = inet_addr(argv[1]);
+    srv_addr.sin_addr.s_addr = inet_addr(server_ip);
     srv_addr.sin_family = AF_INET;
-    srv_addr.sin_port = htons(atoi(argv[2]));
+    srv_addr.sin_port = htons(atoi(server_port));
 
     //连接服务端
     if(connect(sock, (struct sockaddr*)&srv_addr, sizeof(srv_addr)) == -1)
@@ -29,7 +45,15 @@ int main(int argc, char** argv)
         printf("连接服务器成功!\n");
     }
 
-    //接收数据
+    // 认证阶段
+    int auth_result = handle_auth_response(sock);
+    if (auth_result != 0) {
+        fprintf(stderr, "认证失败: %s\n", auth_result == -1 ? "注册失败" : (auth_result == -2 ? "登录失败" : "未知错误"));
+        close(sock);
+        exit(1);
+    }
+
+    // 接收数据
     char buff[buff_size];
     int rec;
     //接收文件信息
@@ -51,7 +75,119 @@ int main(int argc, char** argv)
             break;
         }
     }
+    close(sock);
     return 0;
+}
+
+//显示认证菜单
+void display_auth_menu(void)
+{
+    printf("\n=== 认证选项 ===\n");
+    printf("1. 注册\n");
+    printf("2. 登录\n");
+    printf("3. 直接连接\n");
+    printf("================\n");
+    printf("请选择操作: ");
+}
+
+//发送认证请求
+void send_auth_request(int sock, const char* username, const char* password, const char* cmd)
+{
+    char request[512];
+    snprintf(request, sizeof(request), "%s %s %s", cmd, username, password);
+    send(sock, request, strlen(request), 0);
+}
+
+//处理认证响应
+int handle_auth_response(int sock)
+{
+    char auth_resp[1024];
+    int rec = recv(sock, auth_resp, sizeof(auth_resp) - 1, 0);
+    auth_resp[rec] = '\0';
+
+    if (rec <= 0) {
+        fprintf(stderr, "连接关闭\n");
+        return -3;
+    }
+
+    if (strncmp(auth_resp, AUTH_REQUIRED, 13) == 0) {
+        // 需要认证
+        char username[50] = {0};
+        char password[50] = {0};
+        int auth_option = 0;
+
+        display_auth_menu();
+        scanf("%d", &auth_option);
+        getchar(); // 清除输入缓冲区
+
+        switch (auth_option) {
+            case AUTH_OPTION_REGISTER:
+                printf("请输入用户名: ");
+                fgets(username, sizeof(username), stdin);
+                username[strcspn(username, "\n")] = '\0';
+
+                printf("请输入密码: ");
+                fgets(password, sizeof(password), stdin);
+                password[strcspn(password, "\n")] = '\0';
+
+                send_auth_request(sock, username, password, REGISTER_CMD);
+                break;
+
+            case AUTH_OPTION_LOGIN:
+                printf("请输入用户名: ");
+                fgets(username, sizeof(username), stdin);
+                username[strcspn(username, "\n")] = '\0';
+
+                printf("请输入密码: ");
+                fgets(password, sizeof(password), stdin);
+                password[strcspn(password, "\n")] = '\0';
+
+                send_auth_request(sock, username, password, LOGIN_CMD);
+                break;
+
+            case AUTH_OPTION_DIRECT_CONNECT:
+                send_auth_request(sock, "", "", "DIRECT");
+                break;
+
+            default:
+                fprintf(stderr, "无效的选项\n");
+                return -3;
+        }
+
+        // 等待认证响应
+        rec = recv(sock, auth_resp, sizeof(auth_resp) - 1, 0);
+        auth_resp[rec] = '\0';
+
+        if (rec <= 0) {
+            fprintf(stderr, "连接关闭\n");
+            return -3;
+        }
+
+        if (strncmp(auth_resp, REGISTER_OK, 11) == 0) {
+            printf("注册成功!\n");
+            return 1;
+        } else if (strncmp(auth_resp, REGISTER_FAIL, 17) == 0) {
+            printf("注册失败: %s\n", auth_resp + 17);
+            return -1;
+        } else if (strncmp(auth_resp, LOGIN_OK, 8) == 0) {
+            printf("登录成功!\n");
+            return 1;
+        } else if (strncmp(auth_resp, LOGIN_FAIL, 14) == 0) {
+            printf("登录失败: %s\n", auth_resp + 14);
+            return -2;
+        } else if (strncmp(auth_resp, AUTH_REQUIRED, 13) == 0) {
+            // 其他情况，可能是直接连接
+            printf("直接连接模式\n");
+            return 1;
+        } else {
+            fprintf(stderr, "未知的认证响应: %s\n", auth_resp);
+            return -3;
+        }
+    } else {
+        // 服务器没有要求认证
+        printf("直接连接模式\n");
+        return 1;
+    }
 }
 
 int recve(int sock, file_inof_t* file, char* buff)

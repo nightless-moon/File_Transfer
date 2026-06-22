@@ -23,7 +23,7 @@ typedef struct
 } file_info;
 #pragma pack(pop)
 
-typedef struct 
+typedef struct
 {
     char ip[16];            // 客户端ip地址
     int sock_conn;          // 客户端套接字
@@ -31,6 +31,8 @@ typedef struct
 	time_t online_time;     // 上线时间
 	char** send_file_list;  // 待发送的文件路径列表
 	int send_file_cnt;      // 待发送的文件数量
+	int is_authenticated;  // 是否已认证
+	char username[50];      // 认证后的用户名
 } user;
 void* comm_thr(void* arg);
 int send_file(int sock, const char* file_path);
