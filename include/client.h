@@ -35,4 +35,31 @@ typedef struct
 #pragma pack(pop)
 int recve(int sock, file_inof_t* file, char* buff);
 
+// 多线程下载相关
+typedef struct
+{
+    file_inof_t file_info;
+    int sock;
+    uint64_t total_size;
+    uint64_t received_size;
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int is_completed;
+    int error_code;
+    char error_msg[256];
+    pthread_t *threads;
+    int thread_count;
+    int *thread_status;
+    char **thread_chunk_data;
+    uint64_t chunk_size;
+    size_t resume_offset;
+    int use_resume;
+} file_download_task;
+
+int start_multi_file_download(int sock, file_inof_t *files, int file_count);
+int download_file_with_threads(file_download_task *task);
+void destroy_download_task(file_download_task *task);
+int calculate_thread_count(uint64_t file_size);
+int init_download_config(void *config, uint64_t file_size);
+
 #endif

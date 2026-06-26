@@ -34,7 +34,15 @@ typedef struct
 	int is_authenticated;  // 是否已认证
 	char username[50];      // 认证后的用户名
 } user;
+
+// 多线程下载支持
+typedef struct {
+    uint64_t chunk_size;   // 每次发送的数据块大小
+    uint64_t max_threads;  // 最大并发下载线程数
+} download_server_config_t;
+
 void* comm_thr(void* arg);
 int send_file(int sock, const char* file_path);
+int send_file_chunk(int sock, const char* file_path, uint64_t offset, uint64_t size);
 
 #endif

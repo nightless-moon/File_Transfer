@@ -1,10 +1,15 @@
 #include "client.h"
 #include "resume.h"
 #include "auth.h"
+#include "download.h"
 #include <string.h>
 
 file_inof_t file;        //存放接收到的文件信息
 received_file rcv_file;  //存放接收到的文件信息和已接收的字节数
+
+// 多文件下载
+file_inof_t *multi_files = NULL;
+int multi_file_count = 0;
 
 int main(int argc, char** argv)
 {
@@ -53,28 +58,49 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    // 接收数据
+    // 接收文件列表
     char buff[buff_size];
     int rec;
-    //接收文件信息
+
+    // 先接收所有文件信息
     while(1)
     {
         rec = recve(sock, &file, buff);
         if(rec == 0)
         {
-            printf("\n接收文件成功!\n文件名:%s\n文件大小:%ld\n",file.name, file.size);
-            delete_resume(rcv_file.file.name);
+            printf("\n收到文件: %s (%ld bytes)\n", file.name, file.size);
+
+            // 添加到多文件列表
+            multi_files = realloc(multi_files, (multi_file_count + 1) * sizeof(file_inof_t));
+            memcpy(&multi_files[multi_file_count], &file, sizeof(file_inof_t));
+            multi_file_count++;
+
+            printf("当前文件列表: %d 个文件\n", multi_file_count);
         }
         else if(rec == -1)
         {
-            fprintf(stderr, "接收文件失败!\n");
+            fprintf(stderr, "接收文件信息失败!\n");
+            close(sock);
+            return 1;
         }
         else if(rec == -2)
         {
-            printf("没有新文件了，连接关闭\n");
+            printf("没有新文件了，开始下载...\n");
             break;
         }
     }
+
+    // 开始多文件下载
+    if(multi_file_count > 0) {
+        printf("\n开始多文件下载...\n");
+        int result = start_multi_file_download(sock, multi_files, multi_file_count);
+        if(result != DOWNLOAD_SUCCESS) {
+            fprintf(stderr, "多文件下载失败\n");
+        }
+    }
+
+    // 清理资源
+    free(multi_files);
     close(sock);
     return 0;
 }

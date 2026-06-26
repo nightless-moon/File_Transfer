@@ -235,6 +235,9 @@ void* comm_thr(void* arg)
     }
 
     // 认证通过后，发送文件
+    // 先发送多线程下载选项协商
+    printf("向客户端(%s:%hu)发送多线程下载选项\n", user_xin->ip, user_xin->port);
+
     for(i = 0; i < user_xin->send_file_cnt; i++)
     {
         if(send_file(user_xin->sock_conn, user_xin->send_file_list[i]) == 0)
@@ -244,7 +247,7 @@ void* comm_thr(void* arg)
         else
         {
             printf("向客户端(%s:%hu)发送文件%s失败!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
-        }   
+        }
     }
     printf("客户端(%s:%hu)下线!\n", user_xin->ip, user_xin->port);
     return NULL;
@@ -354,4 +357,64 @@ int send_file(int sock, const char* file_path)
     close(fd);
     return 0;
 }
+
+// 分块发送文件
+int send_file_chunk(int sock, const char* file_path, uint64_t offset, uint64_t size) {
+    char msg[1024];
+    struct stat st;
+    const char* file_name = NULL;
+
+    // 获取文件信息
+    if(lstat(file_path, &st) == -1) {
+        perror("stat fail");
+        return 1;
+    }
+
+    // 验证偏移量
+    if(offset >= st.st_size) {
+        return 2;
+    }
+
+    // 计算实际要发送的大小
+    uint64_t actual_size = size;
+    if(offset + size > st.st_size) {
+        actual_size = st.st_size - offset;
+    }
+
+    // 打开文件
+    int fd = open(file_path, O_RDONLY);
+    if(fd == -1) {
+        perror("open fail");
+        return 3;
+    }
+
+    // 移动文件指针到偏移量位置
+    lseek(fd, offset, SEEK_SET);
+
+    // 发送数据块
+    int rec;
+    char buff[512];
+    uint64_t sent_cnt = 0;
+
+    while(sent_cnt < actual_size) {
+        rec = read(fd, buff, sizeof(buff));
+        if(rec <= 0) {
+            perror("read fail");
+            close(fd);
+            return 4;
+        }
+
+        if(write(sock, buff, rec) != rec) {
+            perror("write_file fail");
+            close(fd);
+            return 5;
+        }
+
+        sent_cnt += rec;
+    }
+
+    close(fd);
+    return 0;
+}
+
 
