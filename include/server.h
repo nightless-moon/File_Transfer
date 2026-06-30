@@ -44,5 +44,6 @@ typedef struct {
 void* comm_thr(void* arg);
 int send_file(int sock, const char* file_path);
 int send_file_chunk(int sock, const char* file_path, uint64_t offset, uint64_t size);
+int send_folder(int sock, const char* folder_path);
 
 #endif

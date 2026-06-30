@@ -240,13 +240,26 @@ void* comm_thr(void* arg)
 
     for(i = 0; i < user_xin->send_file_cnt; i++)
     {
-        if(send_file(user_xin->sock_conn, user_xin->send_file_list[i]) == 0)
-        {
-            printf("向客户端(%s:%hu)发送文件%s成功!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
-        }
-        else
-        {
-            printf("向客户端(%s:%hu)发送文件%s失败!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
+        // 检查是否为文件夹
+        struct stat st;
+        if(lstat(user_xin->send_file_list[i], &st) == 0 && S_ISDIR(st.st_mode)) {
+            if(send_folder(user_xin->sock_conn, user_xin->send_file_list[i]) == 0)
+            {
+                printf("向客户端(%s:%hu)发送文件夹%s成功!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
+            }
+            else
+            {
+                printf("向客户端(%s:%hu)发送文件夹%s失败!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
+            }
+        } else {
+            if(send_file(user_xin->sock_conn, user_xin->send_file_list[i]) == 0)
+            {
+                printf("向客户端(%s:%hu)发送文件%s成功!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
+            }
+            else
+            {
+                printf("向客户端(%s:%hu)发送文件%s失败!\n", user_xin->ip, user_xin->port, user_xin->send_file_list[i]);
+            }
         }
     }
     printf("客户端(%s:%hu)下线!\n", user_xin->ip, user_xin->port);
@@ -255,12 +268,6 @@ void* comm_thr(void* arg)
 
 //向特定客户端发送文件
 int send_file(int sock, const char* file_path)
-{
-    char msg[1024];                     //发送文件内容的缓冲区
-    file_info fi = {0};                 //存放文件信息的结构体
-    uint64_t send_cnt = 0;              //已发送的字节数
-    int rec;                            //接收函数的返回值
-    struct stat st;
 {
     char msg[1024];                     //发送文件内容的缓冲区
     file_info fi = {0};                 //存放文件信息的结构体
@@ -355,6 +362,161 @@ int send_file(int sock, const char* file_path)
     }
 
     close(fd);
+    return 0;
+}
+
+// 扫描文件夹，获取所有文件和子文件夹信息
+typedef struct {
+    char path[512];                    // 完整路径
+    char name[101];                    // 文件名或文件夹名
+    int is_dir;                        // 是否为文件夹
+    uint64_t size;                     // 文件大小（文件夹为0）
+} file_scan_item_t;
+
+static int scan_directory(const char* dir_path, file_scan_item_t** items, int* item_count)
+{
+    DIR *dir;
+    struct dirent *entry;
+    file_scan_item_t *local_items = NULL;
+    int local_count = 0;
+
+    dir = opendir(dir_path);
+    if (dir == NULL) {
+        perror("opendir fail");
+        return -1;
+    }
+
+    while ((entry = readdir(dir)) != NULL) {
+        // 跳过 . 和 ..
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+
+        char full_path[512];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, entry->d_name);
+
+        struct stat st;
+        if (lstat(full_path, &st) == -1) {
+            perror("lstat fail");
+            continue;
+        }
+
+        // 添加到列表
+        local_items = realloc(local_items, (local_count + 1) * sizeof(file_scan_item_t));
+        if (local_items == NULL) {
+            perror("realloc fail");
+            closedir(dir);
+            return -1;
+        }
+
+        strncpy(local_items[local_count].path, full_path, sizeof(local_items[local_count].path) - 1);
+        local_items[local_count].path[sizeof(local_items[local_count].path) - 1] = '\0';
+
+        strncpy(local_items[local_count].name, entry->d_name, sizeof(local_items[local_count].name) - 1);
+        local_items[local_count].name[sizeof(local_items[local_count].name) - 1] = '\0';
+
+        local_items[local_count].is_dir = S_ISDIR(st.st_mode);
+        local_items[local_count].size = (local_items[local_count].is_dir) ? 0 : st.st_size;
+
+        local_count++;
+    }
+
+    closedir(dir);
+
+    *items = local_items;
+    *item_count = local_count;
+    return 0;
+}
+
+// 递归扫描文件夹并发送
+int send_directory_recursive(int sock, const char* dir_path, const char* relative_path)
+{
+    file_scan_item_t *items = NULL;
+    int item_count = 0;
+
+    // 扫描目录
+    if (scan_directory(dir_path, &items, &item_count) != 0) {
+        return -1;
+    }
+
+    // 先发送文件夹信息（is_dir=1）
+    for (int i = 0; i < item_count; i++) {
+        if (items[i].is_dir) {
+            file_info fi = {0};
+            strncpy(fi.name, items[i].name, sizeof(fi.name) - 1);
+            fi.name[sizeof(fi.name) - 1] = '\0';
+            fi.size = 0;  // 文件夹大小为0
+            fi.mode = 0;
+
+            if (write(sock, &fi, sizeof(fi)) != sizeof(fi)) {
+                perror("write folder info fail");
+                free(items);
+                return -1;
+            }
+        }
+    }
+
+    // 然后发送文件和递归处理子文件夹
+    for (int i = 0; i < item_count; i++) {
+        if (items[i].is_dir) {
+            // 创建子文件夹路径
+            char sub_dir_path[512];
+            if (relative_path == NULL || strlen(relative_path) == 0) {
+                snprintf(sub_dir_path, sizeof(sub_dir_path), "%s", items[i].path);
+            } else {
+                snprintf(sub_dir_path, sizeof(sub_dir_path), "%s/%s", relative_path, items[i].name);
+            }
+
+            // 递归处理子文件夹
+            if (send_directory_recursive(sock, items[i].path, sub_dir_path) != 0) {
+                free(items);
+                return -1;
+            }
+        } else {
+            // 发送文件
+            char file_path[512];
+            if (relative_path == NULL || strlen(relative_path) == 0) {
+                strncpy(file_path, items[i].path, sizeof(file_path) - 1);
+            } else {
+                snprintf(file_path, sizeof(file_path), "%s/%s", relative_path, items[i].name);
+            }
+
+            if (send_file(sock, file_path) != 0) {
+                perror("send file fail");
+                free(items);
+                return -1;
+            }
+        }
+    }
+
+    free(items);
+    return 0;
+}
+
+// 向特定客户端发送文件夹
+int send_folder(int sock, const char* folder_path)
+{
+    printf("正在扫描文件夹: %s\n", folder_path);
+
+    // 先发送文件夹信息（特殊标记）
+    file_info fi = {0};
+    strncpy(fi.name, folder_path, sizeof(fi.name) - 1);
+    fi.name[sizeof(fi.name) - 1] = '\0';
+    fi.size = 0;
+    fi.mode = 0;
+
+    if (write(sock, &fi, sizeof(fi)) != sizeof(fi)) {
+        perror("write folder info fail");
+        return 1;
+    }
+
+    // 递归发送文件夹内容
+    if (send_directory_recursive(sock, folder_path, NULL) != 0) {
+        perror("send directory fail");
+        return 2;
+    }
+
+    printf("文件夹发送完成\n");
     return 0;
 }
 

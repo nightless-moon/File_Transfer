@@ -68,14 +68,73 @@ int main(int argc, char** argv)
         rec = recve(sock, &file, buff);
         if(rec == 0)
         {
-            printf("\n收到文件: %s (%ld bytes)\n", file.name, file.size);
+            // 检查是否是文件夹传输
+            if (file.size == 0 && file.mode == 0 && strlen(file.name) > 0) {
+                printf("\n检测到文件夹: %s\n", file.name);
 
-            // 添加到多文件列表
-            multi_files = realloc(multi_files, (multi_file_count + 1) * sizeof(file_inof_t));
-            memcpy(&multi_files[multi_file_count], &file, sizeof(file_inof_t));
-            multi_file_count++;
+                // 创建目录结构
+                if (create_directory_structure(file.name) == -1) {
+                    fprintf(stderr, "创建目录结构失败: %s\n", file.name);
+                    continue;
+                }
 
-            printf("当前文件列表: %d 个文件\n", multi_file_count);
+                printf("开始接收文件夹内容...\n");
+
+                // 递归接收文件夹内容
+                int item_count = 0;
+                while (1) {
+                    file_info item = {0};
+                    rec = recv(sock, &item, sizeof(item), 0);
+                    if (rec <= 0) {
+                        fprintf(stderr, "接收文件夹项失败\n");
+                        break;
+                    }
+
+                    // 检查是否结束（文件名全0）
+                    if (item.name[0] == '\0') {
+                        break;
+                    }
+
+                    // 构建完整路径
+                    char full_path[512];
+                    if (strncmp(item.name, file.name, strlen(file.name)) == 0) {
+                        strncpy(full_path, item.name, sizeof(full_path) - 1);
+                    } else {
+                        snprintf(full_path, sizeof(full_path), "%s/%s", file.name, item.name);
+                    }
+
+                    if (item.size == 0 && item.mode == 0) {
+                        // 子文件夹
+                        printf("  创建子目录: %s\n", item.name);
+                        if (create_directory_structure(full_path) == -1) {
+                            return -1;
+                        }
+                    } else {
+                        // 文件，使用常规接收
+                        printf("  接收文件: %s\n", item.name);
+                        char* recv_buff = (char*)malloc(buff_size);
+                        if (recve(sock, &item, recv_buff) != 0) {
+                            fprintf(stderr, "接收文件失败: %s\n", item.name);
+                            free(recv_buff);
+                            return -1;
+                        }
+                        free(recv_buff);
+                    }
+
+                    item_count++;
+                }
+
+                printf("文件夹接收完成，共 %d 个项\n", item_count);
+            } else {
+                printf("\n收到文件: %s (%ld bytes)\n", file.name, file.size);
+
+                // 添加到多文件列表
+                multi_files = realloc(multi_files, (multi_file_count + 1) * sizeof(file_inof_t));
+                memcpy(&multi_files[multi_file_count], &file, sizeof(file_inof_t));
+                multi_file_count++;
+
+                printf("当前文件列表: %d 个文件\n", multi_file_count);
+            }
         }
         else if(rec == -1)
         {
@@ -220,22 +279,27 @@ int recve(int sock, file_inof_t* file, char* buff)
 {
     // 设置超时，等待文件信息 5秒
     struct timeval tv;
-    tv.tv_sec = 5;   
+    tv.tv_sec = 5;
     tv.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     int rec;
     rec = recv(sock, file, sizeof(file_inof_t), 0);
 
-    if(rec == -1 && errno == EAGAIN) 
+    if(rec == -1 && errno == EAGAIN)
     {
         // 超时，没有新文件了
         return -2;
     }
+    if(rec <= 0)
+    {
+        fprintf(stderr, "recv fail: rec=%d\n", rec);
+        return -1;
+    }
     if(rec != sizeof(file_inof_t))
     {
-        perror("recv fail");
-        exit(1);
+        fprintf(stderr, "recv fail: expected %zu, got %d\n", sizeof(file_inof_t), rec);
+        return -1;
     }
 
     //解除超时设置，准备接收文件数据
@@ -341,6 +405,36 @@ int recve(int sock, file_inof_t* file, char* buff)
     
     printf("\n");
     close(fd);
+    return 0;
+}
+
+// 创建目录结构
+static int create_directory_structure(const char* dir_path)
+{
+    char path[512];
+    const char *ptr = dir_path;
+    const char *start = dir_path;
+
+    while (*ptr) {
+        if (*ptr == '/' || *ptr == '\\') {
+            if (ptr - start > 0) {
+                strncpy(path, start, ptr - start);
+                path[ptr - start] = '\0';
+
+                // 检查目录是否存在
+                struct stat st;
+                if (stat(path, &st) == -1) {
+                    if (mkdir(path, 0755) == -1) {
+                        perror("mkdir fail");
+                        return -1;
+                    }
+                }
+            }
+            start = ptr + 1;
+        }
+        ptr++;
+    }
+
     return 0;
 }
 
